@@ -1172,38 +1172,288 @@ public final class TouchControls extends View implements SensorEventListener, In
         lastAmplitude = 0;
     }
 
-    // ---------- drawing
+        // ---------- drawing (Halo style: octagon panels, HUD colours, drawn icons)
+
+    private static final int HALO_CYAN = 0xff8fe9ff;
+    private static final int HALO_AMBER = 0xffffb74d;
+    private static final int HALO_PANEL = 0xaa07202c;
+
+    private final android.graphics.Path shape = new android.graphics.Path();
+    private final android.graphics.RectF box = new android.graphics.RectF();
+    private final android.graphics.Typeface hudFont = android.graphics.Typeface.create(
+        android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD);
 
     private static int alpha(int color, float opacity) {
         int alpha = Math.round(Color.alpha(color) * opacity);
         return (color & 0x00ffffff) | (Math.max(0, Math.min(255, alpha)) << 24);
     }
 
-    private void circle(Canvas canvas, float x, float y, float radius, String label, boolean active,
-            float textSize, float opacity) {
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(alpha(active ? 0x9983d9ff : 0x55304050, opacity));
-        canvas.drawCircle(x, y, radius, paint);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(2);
-        paint.setColor(alpha(active ? 0xffaee7ff : 0xffffffff, opacity));
-        canvas.drawCircle(x, y, radius, paint);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(alpha(Color.WHITE, Math.max(opacity, 0.5f)));
-        paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTextSize(textSize);
-        // (a long name, "Y / Weapon", is made smaller to fit inside the circle)
-        float width = paint.measureText(label);
-        if (width > radius * LABEL_WIDTH) {
-            textSize *= radius * LABEL_WIDTH / width;
-            paint.setTextSize(textSize);
+    /** a regular octagon with flat top, bottom and sides, inside the circle of this radius */
+    private void octagon(android.graphics.Path p, float x, float y, float r) {
+        p.reset();
+        for (int i = 0; i < 8; i++) {
+            double a = Math.toRadians(22.5 + i * 45);
+            float px = x + (float) Math.cos(a) * r;
+            float py = y + (float) Math.sin(a) * r;
+            if (i == 0)
+                p.moveTo(px, py);
+            else
+                p.lineTo(px, py);
         }
-        canvas.drawText(label, x, y + textSize * 0.36f, paint);
+        p.close();
+    }
+
+    /** the button's body: dark glass octagon, a thin HUD outline, an inner line, and a glow when held */
+    private void panel(Canvas canvas, float x, float y, float r, int accent, boolean active, float opacity) {
+        octagon(shape, x, y, r);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(alpha(active ? alpha(accent, 0.45f) : HALO_PANEL, opacity));
+        canvas.drawPath(shape, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+        if (active) {
+            paint.setStrokeWidth(10);
+            paint.setColor(alpha(accent, 0.15f * opacity));
+            canvas.drawPath(shape, paint);
+            paint.setStrokeWidth(6);
+            paint.setColor(alpha(accent, 0.25f * opacity));
+            canvas.drawPath(shape, paint);
+        }
+        paint.setStrokeWidth(2);
+        paint.setColor(alpha(accent, Math.max(opacity, 0.45f)));
+        canvas.drawPath(shape, paint);
+        octagon(shape, x, y, r * 0.8f);
+        paint.setStrokeWidth(1);
+        paint.setColor(alpha(accent, 0.35f * opacity));
+        canvas.drawPath(shape, paint);
+        paint.setStrokeJoin(Paint.Join.MITER);
+    }
+
+    private void textLabel(Canvas canvas, String label, float x, float y, float r, int color, float size) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(color);
+        paint.setTypeface(hudFont);
+        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setTextSize(size);
+        String text = label.toUpperCase(Locale.US);
+        float width = paint.measureText(text);
+        if (width > r * LABEL_WIDTH) {
+            size *= r * LABEL_WIDTH / width;
+            paint.setTextSize(size);
+        }
+        canvas.drawText(text, x, y + size * 0.36f, paint);
+        paint.setTypeface(null);
+    }
+
+    /** which icon a control gets: the game control it does (0..11), 100..103 for the d-pad, -1 for none */
+    private int iconFor(int type) {
+        Kind kind = KINDS[type];
+        if (kind.gamepadButton < 0)
+            return -1;
+        int control = bindings[kind.gamepadButton];
+        if (control >= 0 && control < GAME_CONTROLS.length)
+            return control;
+        switch (kind.gamepadButton) {
+            case 8: return 100;
+            case 9: return 101;
+            case 10: return 102;
+            case 11: return 103;
+            default: return -1;
+        }
+    }
+
+    private static void chevron(android.graphics.Path p, float x, float y, float s, boolean up) {
+        float d = s * 0.45f * (up ? 1 : -1);
+        p.moveTo(x - s, y + d);
+        p.lineTo(x, y - d);
+        p.lineTo(x + s, y + d);
+    }
+
+    private static void arrowHead(android.graphics.Path p, float x, float y, float dx, float dy, float s) {
+        // the head points along (dx, dy), a unit vector, with its tip at (x, y)
+        float nx = -dy;
+        float ny = dx;
+        p.moveTo(x - dx * s * 0.55f + nx * s * 0.45f, y - dy * s * 0.55f + ny * s * 0.45f);
+        p.lineTo(x, y);
+        p.lineTo(x - dx * s * 0.55f - nx * s * 0.45f, y - dy * s * 0.55f - ny * s * 0.45f);
+    }
+
+    private void grenade(Canvas canvas, android.graphics.Path p, float x, float y, float s) {
+        canvas.drawCircle(x, y + s * 0.25f, s * 0.7f, paint);
+        p.moveTo(x - s * 0.3f, y - s * 0.5f);
+        p.lineTo(x + s * 0.3f, y - s * 0.5f);
+        p.moveTo(x + s * 0.3f, y - s * 0.5f);
+        p.lineTo(x + s * 0.85f, y - s * 0.9f);
+        canvas.drawPath(p, paint);
+    }
+
+    /** an icon for a game control, drawn with lines in this colour */
+    private void icon(Canvas canvas, int icon, float x, float y, float r, int color) {
+        float s = r * 0.46f;
+        android.graphics.Path p = shape;
+        p.reset();
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(Math.max(2f, r * 0.09f));
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+        paint.setColor(color);
+        switch (icon) {
+            case 0: // Jump
+                chevron(p, x, y - s * 0.45f, s, true);
+                chevron(p, x, y + s * 0.35f, s, true);
+                canvas.drawPath(p, paint);
+                break;
+            case 1: // Grenade type
+                grenade(canvas, p, x, y, s * 0.85f);
+                paint.setStrokeWidth(Math.max(1f, r * 0.05f));
+                canvas.drawCircle(x, y + s * 0.2f, s * 1.1f, paint);
+                break;
+            case 2: { // Reload
+                float rr = s * 0.85f;
+                box.set(x - rr, y - rr, x + rr, y + rr);
+                canvas.drawArc(box, 40, 280, false, paint);
+                float a = (float) Math.toRadians(320);
+                float ex = x + (float) Math.cos(a) * rr;
+                float ey = y + (float) Math.sin(a) * rr;
+                arrowHead(p, ex, ey, -(float) Math.sin(a), (float) Math.cos(a), s);
+                canvas.drawPath(p, paint);
+                break;
+            }
+            case 3: // Weapon switch
+                p.moveTo(x - s, y - s * 0.4f);
+                p.lineTo(x + s, y - s * 0.4f);
+                arrowHead(p, x + s, y - s * 0.4f, 1, 0, s);
+                p.moveTo(x + s, y + s * 0.4f);
+                p.lineTo(x - s, y + s * 0.4f);
+                arrowHead(p, x - s, y + s * 0.4f, -1, 0, s);
+                canvas.drawPath(p, paint);
+                break;
+            case 4: // Melee: a blade with a crossguard
+                p.moveTo(x - s * 0.9f, y + s * 0.9f);
+                p.lineTo(x + s * 0.9f, y - s * 0.9f);
+                p.moveTo(x - s * 0.7f, y - s * 0.2f);
+                p.lineTo(x + s * 0.2f, y + s * 0.7f);
+                canvas.drawPath(p, paint);
+                break;
+            case 5: // Flashlight
+                canvas.drawCircle(x - s * 0.8f, y, s * 0.35f, paint);
+                p.moveTo(x - s * 0.4f, y - s * 0.3f);
+                p.lineTo(x + s * 0.9f, y - s * 0.8f);
+                p.moveTo(x - s * 0.4f, y + s * 0.3f);
+                p.lineTo(x + s * 0.9f, y + s * 0.8f);
+                p.moveTo(x - s * 0.3f, y);
+                p.lineTo(x + s * 0.9f, y);
+                canvas.drawPath(p, paint);
+                break;
+            case 6: // Grenade
+                grenade(canvas, p, x, y, s);
+                break;
+            case 7: // Fire: a bullet
+                p.moveTo(x - s * 0.45f, y + s);
+                p.lineTo(x - s * 0.45f, y - s * 0.2f);
+                p.quadTo(x - s * 0.45f, y - s, x, y - s * 1.1f);
+                p.quadTo(x + s * 0.45f, y - s, x + s * 0.45f, y - s * 0.2f);
+                p.lineTo(x + s * 0.45f, y + s);
+                p.close();
+                p.moveTo(x - s * 0.45f, y + s * 0.4f);
+                p.lineTo(x + s * 0.45f, y + s * 0.4f);
+                canvas.drawPath(p, paint);
+                break;
+            case 8: // Pause
+                canvas.drawLine(x - s * 0.4f, y - s * 0.8f, x - s * 0.4f, y + s * 0.8f, paint);
+                canvas.drawLine(x + s * 0.4f, y - s * 0.8f, x + s * 0.4f, y + s * 0.8f, paint);
+                break;
+            case 9: // Back
+                p.moveTo(x + s * 0.9f, y);
+                p.lineTo(x - s * 0.8f, y);
+                arrowHead(p, x - s * 0.9f, y, -1, 0, s);
+                canvas.drawPath(p, paint);
+                break;
+            case 10: // Crouch
+                chevron(p, x, y - s * 0.35f, s, false);
+                chevron(p, x, y + s * 0.45f, s, false);
+                canvas.drawPath(p, paint);
+                break;
+            case 11: // Zoom: a scope
+                canvas.drawCircle(x, y, s * 0.8f, paint);
+                canvas.drawLine(x - s * 1.1f, y, x - s * 0.35f, y, paint);
+                canvas.drawLine(x + s * 0.35f, y, x + s * 1.1f, y, paint);
+                canvas.drawLine(x, y - s * 1.1f, x, y - s * 0.35f, paint);
+                canvas.drawLine(x, y + s * 0.35f, x, y + s * 1.1f, paint);
+                break;
+            default: { // 100..103: the d-pad, a filled triangle
+                paint.setStyle(Paint.Style.FILL);
+                p.moveTo(x, y - s * 0.8f);
+                p.lineTo(x + s * 0.7f, y + s * 0.6f);
+                p.lineTo(x - s * 0.7f, y + s * 0.6f);
+                p.close();
+                canvas.save();
+                canvas.rotate(icon == 101 ? 180f : icon == 102 ? 270f : icon == 103 ? 90f : 0f, x, y);
+                canvas.drawPath(p, paint);
+                canvas.restore();
+                break;
+            }
+        }
+        paint.setStrokeCap(Paint.Cap.BUTT);
+        paint.setStrokeJoin(Paint.Join.MITER);
+    }
+
+    /** one control: its panel and its icon (or its name, when it has no icon) */
+    private void drawControl(Canvas canvas, int i, boolean active) {
+        int type = layout.type(i);
+        float x = layout.x(i);
+        float y = layout.y(i);
+        float r = layout.radius(i);
+        int icon = iconFor(type);
+        int accent = (icon == 6 || icon == 7) ? HALO_AMBER : HALO_CYAN;
+        panel(canvas, x, y, r, accent, active, layout.opacity);
+        int color = alpha(active ? Color.WHITE : accent, Math.max(layout.opacity, 0.6f));
+        if (icon >= 0)
+            icon(canvas, icon, x, y, r, color);
+        else
+            textLabel(canvas, label(type), x, y, r, color, Math.min(11 * Math.max(layout.sizeScale(i), r / 36f), 16));
     }
 
     /** a toolbar item: never fainter than half, so that it can always be found */
     private void toolbarItem(Canvas canvas, float x, float radius, String label) {
-        circle(canvas, x, toolbarY(), toolbarRadius(radius), label, false, 11, Math.max(layout.opacity, 0.5f));
+        float opacity = Math.max(layout.opacity, 0.5f);
+        float r = toolbarRadius(radius);
+        float y = toolbarY();
+        panel(canvas, x, y, r, HALO_CYAN, false, opacity);
+        int color = alpha(HALO_CYAN, Math.max(opacity, 0.8f));
+        float s = r * 0.6f;
+        if (label.equals("Options")) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setColor(color);
+            canvas.drawCircle(x, y, s * 0.45f, paint);
+            for (int i = 0; i < 8; i++) {
+                double a = Math.toRadians(i * 45);
+                float c = (float) Math.cos(a);
+                float n = (float) Math.sin(a);
+                canvas.drawLine(x + c * s * 0.7f, y + n * s * 0.7f, x + c * s, y + n * s, paint);
+            }
+            paint.setStrokeCap(Paint.Cap.BUTT);
+        } else if (label.equals("Hide") || label.equals("Touch")) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setColor(color);
+            shape.reset();
+            shape.moveTo(x - s, y);
+            shape.quadTo(x, y - s * 1.1f, x + s, y);
+            shape.quadTo(x, y + s * 1.1f, x - s, y);
+            canvas.drawPath(shape, paint);
+            canvas.drawCircle(x, y, s * 0.3f, paint);
+            if (label.equals("Touch"))
+                canvas.drawLine(x - s, y + s * 0.8f, x + s, y - s * 0.8f, paint);
+            paint.setStrokeCap(Paint.Cap.BUTT);
+            paint.setStrokeJoin(Paint.Join.MITER);
+        } else {
+            textLabel(canvas, label, x, y, r, color, 11);
+        }
     }
 
     private void drawToolbar(Canvas canvas) {
@@ -1211,15 +1461,15 @@ public final class TouchControls extends View implements SensorEventListener, In
             toolbarItem(canvas, optionsX(), OPTIONS_RADIUS, "Save");
             toolbarItem(canvas, optionsX() - 156, OPTIONS_RADIUS, "Export");
             toolbarItem(canvas, optionsX() - 78, OPTIONS_RADIUS, "Import");
-            paint.setColor(Color.WHITE);
-            paint.setTextSize(14);
-            canvas.drawText("Drag the controls, then push Save", logicalWidth / 2, toolbarY() + 58, paint);
+            textLabel(canvas, "Drag the controls, then push Save", logicalWidth / 2, toolbarY() + 58,
+                10000, Color.WHITE, 14);
         } else {
             toolbarItem(canvas, logicalWidth / 2, TOOLBAR_RADIUS, hidden ? "Touch" : "Hide");
             toolbarItem(canvas, optionsX(), OPTIONS_RADIUS, "Options");
         }
     }
 
+    /** the move stick: a radar-style ring with ticks, and an octagon knob */
     private void drawStick(Canvas canvas) {
         int stick = TouchLayout.LEFT;
         float radius = layout.radius(stick);
@@ -1227,9 +1477,32 @@ public final class TouchControls extends View implements SensorEventListener, In
         // (a floating stick near an edge is drawn whole, nearer the middle than its centre)
         float x = Math.max(radius, Math.min(logicalWidth - radius, stickCenterX()));
         float y = Math.max(radius, Math.min(logicalHeight - radius, stickCenterY()));
-        circle(canvas, x, y, radius, "Move", false, 11 * size, layout.opacity);
-        circle(canvas, x + axes[0] / 32767f * radius, y + axes[1] / 32767f * radius,
-            Math.max(STICK_KNOB_RADIUS * size, radius * 0.375f), "", held(stick), 11, layout.opacity);
+        boolean active = held(stick);
+        float opacity = layout.opacity;
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(alpha(HALO_PANEL, opacity));
+        canvas.drawCircle(x, y, radius, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(2);
+        paint.setColor(alpha(HALO_CYAN, Math.max(opacity, 0.45f)));
+        canvas.drawCircle(x, y, radius, paint);
+        paint.setStrokeWidth(1);
+        paint.setColor(alpha(HALO_CYAN, 0.4f * opacity));
+        canvas.drawCircle(x, y, radius * 0.55f, paint);
+        paint.setStrokeWidth(2);
+        paint.setColor(alpha(HALO_CYAN, Math.max(opacity, 0.45f)));
+        for (int i = 0; i < 8; i++) {
+            double a = Math.toRadians(i * 45);
+            float c = (float) Math.cos(a);
+            float n = (float) Math.sin(a);
+            float from = (i % 2 == 0) ? 0.74f : 0.86f;
+            canvas.drawLine(x + c * radius * from, y + n * radius * from,
+                x + c * radius * 0.97f, y + n * radius * 0.97f, paint);
+        }
+        float knob = Math.max(STICK_KNOB_RADIUS * size, radius * 0.375f);
+        float kx = x + axes[0] / 32767f * radius;
+        float ky = y + axes[1] / 32767f * radius;
+        panel(canvas, kx, ky, knob, HALO_CYAN, active, opacity);
     }
 
     @Override
@@ -1244,12 +1517,11 @@ public final class TouchControls extends View implements SensorEventListener, In
             for (int i = 0; i < layout.size(); i++) {
                 if (!layout.shown(i) || layout.type(i) == TouchLayout.LEFT)
                     continue;
-                float textSize = 11 * Math.max(layout.sizeScale(i), layout.radius(i) / 36f);
-                circle(canvas, layout.x(i), layout.y(i), layout.radius(i), label(layout.type(i)),
-                    held(i) || dragControl == i, Math.min(textSize, 16), layout.opacity);
+                drawControl(canvas, i, held(i) || dragControl == i);
             }
         }
         drawToolbar(canvas);
         canvas.restore();
     }
-}
+                }
+                         
