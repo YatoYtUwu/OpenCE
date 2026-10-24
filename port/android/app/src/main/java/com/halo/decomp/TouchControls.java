@@ -1172,11 +1172,13 @@ public final class TouchControls extends View implements SensorEventListener, In
         lastAmplitude = 0;
     }
 
-        // ---------- drawing (Halo style: octagon panels, HUD colours, drawn icons)
+            // ---------- drawing (round glass buttons, Shock Blue thumbstick)
 
-    private static final int HALO_CYAN = 0xff8fe9ff;
+    private static final int HALO_CYAN = 0xff5cc4ff;
     private static final int HALO_AMBER = 0xffffb74d;
-    private static final int HALO_PANEL = 0xaa07202c;
+    private static final int SHOCK_LIGHT = 0xff8fd3ff;
+    private static final int SHOCK_BLUE = 0xff2d9cff;
+    private static final int SHOCK_DARK = 0xff0b4a9c;
 
     private final android.graphics.Path shape = new android.graphics.Path();
     private final android.graphics.RectF box = new android.graphics.RectF();
@@ -1188,48 +1190,76 @@ public final class TouchControls extends View implements SensorEventListener, In
         return (color & 0x00ffffff) | (Math.max(0, Math.min(255, alpha)) << 24);
     }
 
-    /** a regular octagon with flat top, bottom and sides, inside the circle of this radius */
-    private void octagon(android.graphics.Path p, float x, float y, float r) {
-        p.reset();
-        for (int i = 0; i < 8; i++) {
-            double a = Math.toRadians(22.5 + i * 45);
-            float px = x + (float) Math.cos(a) * r;
-            float py = y + (float) Math.sin(a) * r;
-            if (i == 0)
-                p.moveTo(px, py);
-            else
-                p.lineTo(px, py);
-        }
-        p.close();
+    /** a blend of two colours: t = 0 is a, t = 1 is b (the alpha stays a's) */
+    private static int mix(int a, int b, float t) {
+        int red = Math.round(Color.red(a) * (1 - t) + Color.red(b) * t);
+        int green = Math.round(Color.green(a) * (1 - t) + Color.green(b) * t);
+        int blue = Math.round(Color.blue(a) * (1 - t) + Color.blue(b) * t);
+        return Color.argb(Color.alpha(a), red, green, blue);
     }
 
-    /** the button's body: dark glass octagon, a thin HUD outline, an inner line, and a glow when held */
-    private void panel(Canvas canvas, float x, float y, float r, int accent, boolean active, float opacity) {
-        octagon(shape, x, y, r);
+    private static android.graphics.Shader radial(float x, float y, float radius, int[] colors, float[] positions) {
+        return new android.graphics.RadialGradient(x, y, Math.max(1f, radius), colors, positions,
+            android.graphics.Shader.TileMode.CLAMP);
+    }
+
+    private static android.graphics.Shader linear(float x0, float y0, float x1, float y1, int c0, int c1) {
+        return new android.graphics.LinearGradient(x0, y0, x1, y1, c0, c1,
+            android.graphics.Shader.TileMode.CLAMP);
+    }
+
+    /** the gloss on a glass disc: a pale cap on its upper half that fades out */
+    private void gloss(Canvas canvas, float x, float y, float r, float strength) {
+        box.set(x - r * 0.72f, y - r * 0.92f, x + r * 0.72f, y - r * 0.1f);
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(alpha(active ? alpha(accent, 0.45f) : HALO_PANEL, opacity));
-        canvas.drawPath(shape, paint);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeJoin(Paint.Join.ROUND);
-        if (active) {
-            paint.setStrokeWidth(10);
-            paint.setColor(alpha(accent, 0.15f * opacity));
-            canvas.drawPath(shape, paint);
-            paint.setStrokeWidth(6);
-            paint.setColor(alpha(accent, 0.25f * opacity));
-            canvas.drawPath(shape, paint);
+        paint.setShader(linear(x, y - r * 0.92f, x, y - r * 0.1f,
+            alpha(Color.WHITE, strength), alpha(Color.WHITE, 0f)));
+        canvas.drawOval(box, paint);
+        paint.setShader(null);
+    }
+
+    /**
+     * a round glass button: soft shadow, a gradient body lit from the upper left, a
+     * lit rim, an inner line and a gloss. Held, it sinks (smaller, no shadow) and glows.
+     */
+    private void panel(Canvas canvas, float x, float y, float r, int accent, boolean active, float opacity) {
+        float rr = active ? r * 0.94f : r;
+        int dark = 0xff04101c;
+        paint.setShader(null);
+        if (!active) {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(alpha(0x66000000, opacity));
+            canvas.drawCircle(x, y + r * 0.06f, rr, paint);
+        } else {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(r * 0.22f);
+            paint.setColor(alpha(accent, 0.18f * opacity));
+            canvas.drawCircle(x, y, rr + r * 0.02f, paint);
+            paint.setStrokeWidth(r * 0.12f);
+            paint.setColor(alpha(accent, 0.3f * opacity));
+            canvas.drawCircle(x, y, rr + r * 0.02f, paint);
         }
-        paint.setStrokeWidth(2);
-        paint.setColor(alpha(accent, Math.max(opacity, 0.45f)));
-        canvas.drawPath(shape, paint);
-        octagon(shape, x, y, r * 0.8f);
-        paint.setStrokeWidth(1);
-        paint.setColor(alpha(accent, 0.35f * opacity));
-        canvas.drawPath(shape, paint);
-        paint.setStrokeJoin(Paint.Join.MITER);
+        int centre = active ? mix(accent, Color.WHITE, 0.15f) : mix(accent, dark, 0.55f);
+        int edge = active ? mix(accent, dark, 0.35f) : mix(accent, dark, 0.9f);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setShader(radial(x - rr * 0.25f, y - rr * 0.35f, rr * 1.35f,
+            new int[] {alpha(centre, 0.92f * opacity), alpha(edge, 0.92f * opacity)}, null));
+        canvas.drawCircle(x, y, rr, paint);
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(2.2f);
+        paint.setShader(linear(x - rr, y - rr, x + rr, y + rr,
+            alpha(mix(accent, Color.WHITE, 0.5f), Math.max(opacity, 0.6f)), alpha(accent, 0.25f)));
+        canvas.drawCircle(x, y, rr, paint);
+        paint.setShader(null);
+        paint.setStrokeWidth(1f);
+        paint.setColor(alpha(accent, 0.28f * opacity));
+        canvas.drawCircle(x, y, rr * 0.84f, paint);
+        gloss(canvas, x, y, rr, (active ? 0.14f : 0.3f) * Math.max(opacity, 0.5f));
     }
 
     private void textLabel(Canvas canvas, String label, float x, float y, float r, int color, float size) {
+        paint.setShader(null);
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(color);
         paint.setTypeface(hudFont);
@@ -1292,6 +1322,7 @@ public final class TouchControls extends View implements SensorEventListener, In
         float s = r * 0.46f;
         android.graphics.Path p = shape;
         p.reset();
+        paint.setShader(null);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(Math.max(2f, r * 0.09f));
         paint.setStrokeCap(Paint.Cap.ROUND);
@@ -1398,8 +1429,195 @@ public final class TouchControls extends View implements SensorEventListener, In
         paint.setStrokeJoin(Paint.Join.MITER);
     }
 
-    /** one control: its panel and its icon (or its name, when it has no icon) */
+    /** one control: its glass button and its icon (or its name, when it has no icon) */
     private void drawControl(Canvas canvas, int i, boolean active) {
+        int type = layout.type(i);
+        float x = layout.x(i);
+        float y = layout.y(i);
+        float r = layout.radius(i);
+        int icon = iconFor(type);
+        int accent = (icon == 6 || icon == 7) ? HALO_AMBER : HALO_CYAN;
+        panel(canvas, x, y, r, accent, active, layout.opacity);
+        int color = alpha(active ? Color.WHITE : mix(accent, Color.WHITE, 0.55f), Math.max(layout.opacity, 0.7f));
+        float cy = active ? y + r * 0.02f : y;
+        if (icon >= 0)
+            icon(canvas, icon, x, cy, r, color);
+        else
+            textLabel(canvas, label(type), x, cy, r, color, Math.min(11 * Math.max(layout.sizeScale(i), r / 36f), 16));
+    }
+
+    /** a toolbar item: never fainter than half, so that it can always be found */
+    private void toolbarItem(Canvas canvas, float x, float radius, String label) {
+        float opacity = Math.max(layout.opacity, 0.5f);
+        float r = toolbarRadius(radius);
+        float y = toolbarY();
+        panel(canvas, x, y, r, HALO_CYAN, false, opacity);
+        int color = alpha(mix(HALO_CYAN, Color.WHITE, 0.55f), Math.max(opacity, 0.85f));
+        float s = r * 0.6f;
+        paint.setShader(null);
+        if (label.equals("Options")) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setColor(color);
+            canvas.drawCircle(x, y, s * 0.45f, paint);
+            for (int i = 0; i < 8; i++) {
+                double a = Math.toRadians(i * 45);
+                float c = (float) Math.cos(a);
+                float n = (float) Math.sin(a);
+                canvas.drawLine(x + c * s * 0.7f, y + n * s * 0.7f, x + c * s, y + n * s, paint);
+            }
+            paint.setStrokeCap(Paint.Cap.BUTT);
+        } else if (label.equals("Hide") || label.equals("Touch")) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setColor(color);
+            shape.reset();
+            shape.moveTo(x - s, y);
+            shape.quadTo(x, y - s * 1.1f, x + s, y);
+            shape.quadTo(x, y + s * 1.1f, x - s, y);
+            canvas.drawPath(shape, paint);
+            canvas.drawCircle(x, y, s * 0.3f, paint);
+            if (label.equals("Touch"))
+                canvas.drawLine(x - s, y + s * 0.8f, x + s, y - s * 0.8f, paint);
+            paint.setStrokeCap(Paint.Cap.BUTT);
+            paint.setStrokeJoin(Paint.Join.MITER);
+        } else {
+            textLabel(canvas, label, x, y, r, color, 11);
+        }
+    }
+
+    private void drawToolbar(Canvas canvas) {
+        if (editing) {
+            toolbarItem(canvas, optionsX(), OPTIONS_RADIUS, "Save");
+            toolbarItem(canvas, optionsX() - 156, OPTIONS_RADIUS, "Export");
+            toolbarItem(canvas, optionsX() - 78, OPTIONS_RADIUS, "Import");
+            textLabel(canvas, "Drag the controls, then push Save", logicalWidth / 2, toolbarY() + 58,
+                10000, Color.WHITE, 14);
+        } else {
+            toolbarItem(canvas, logicalWidth / 2, TOOLBAR_RADIUS, hidden ? "Touch" : "Hide");
+            toolbarItem(canvas, optionsX(), OPTIONS_RADIUS, "Options");
+        }
+    }
+
+    /**
+     * the move stick: a dark well with a Shock Blue ring, and a thumbstick like the Xbox
+     * Series pad's: a blue cap lit from the upper left, a concave dish and a ring of dots
+     */
+    private void drawStick(Canvas canvas) {
+        int stick = TouchLayout.LEFT;
+        float radius = layout.radius(stick);
+        float size = layout.sizeScale(stick);
+        // (a floating stick near an edge is drawn whole, nearer the middle than its centre)
+        float x = Math.max(radius, Math.min(logicalWidth - radius, stickCenterX()));
+        float y = Math.max(radius, Math.min(logicalHeight - radius, stickCenterY()));
+        boolean active = held(stick);
+        float opacity = layout.opacity;
+        float strong = Math.max(opacity, 0.75f);
+
+        // the well
+        paint.setStyle(Paint.Style.FILL);
+        paint.setShader(radial(x, y, radius,
+            new int[] {alpha(0xff12304a, 0.85f * opacity), alpha(0xff0a1b2c, 0.9f * opacity), alpha(0xff030a12, 0.95f * opacity)},
+            new float[] {0f, 0.7f, 1f}));
+        canvas.drawCircle(x, y, radius, paint);
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(3f);
+        paint.setShader(linear(x - radius, y - radius, x + radius, y + radius,
+            alpha(SHOCK_LIGHT, Math.max(opacity, 0.55f)), alpha(SHOCK_DARK, Math.max(opacity, 0.55f))));
+        canvas.drawCircle(x, y, radius, paint);
+        paint.setShader(null);
+        paint.setStrokeWidth(1f);
+        paint.setColor(alpha(SHOCK_BLUE, 0.25f * opacity));
+        canvas.drawCircle(x, y, radius * 0.62f, paint);
+        paint.setStrokeWidth(2f);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setColor(alpha(SHOCK_BLUE, 0.6f * opacity));
+        for (int i = 0; i < 4; i++) {
+            double a = Math.toRadians(i * 90);
+            float c = (float) Math.cos(a);
+            float n = (float) Math.sin(a);
+            canvas.drawLine(x + c * radius * 0.8f, y + n * radius * 0.8f,
+                x + c * radius * 0.92f, y + n * radius * 0.92f, paint);
+        }
+        paint.setStrokeCap(Paint.Cap.BUTT);
+
+        // the thumbstick
+        float knob = Math.max(STICK_KNOB_RADIUS * size, radius * 0.42f);
+        float kx = x + axes[0] / 32767f * radius;
+        float ky = y + axes[1] / 32767f * radius;
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(alpha(0x88000000, strong));
+        canvas.drawCircle(kx + knob * 0.06f, ky + knob * 0.14f, knob * 1.02f, paint);
+        if (active) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(knob * 0.28f);
+            paint.setColor(alpha(SHOCK_BLUE, 0.2f * strong));
+            canvas.drawCircle(kx, ky, knob * 1.06f, paint);
+            paint.setStrokeWidth(knob * 0.14f);
+            paint.setColor(alpha(SHOCK_LIGHT, 0.3f * strong));
+            canvas.drawCircle(kx, ky, knob * 1.04f, paint);
+        }
+        // the blue cap
+        paint.setStyle(Paint.Style.FILL);
+        int light = active ? mix(SHOCK_LIGHT, Color.WHITE, 0.25f) : SHOCK_LIGHT;
+        paint.setShader(radial(kx - knob * 0.3f, ky - knob * 0.35f, knob * 1.5f,
+            new int[] {alpha(light, strong), alpha(SHOCK_BLUE, strong), alpha(SHOCK_DARK, strong)},
+            new float[] {0f, 0.5f, 1f}));
+        canvas.drawCircle(kx, ky, knob, paint);
+        paint.setShader(null);
+        // the lit rim
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(Math.max(1.5f, knob * 0.08f));
+        paint.setShader(linear(kx - knob, ky - knob, kx + knob, ky + knob,
+            alpha(Color.WHITE, 0.55f * strong), alpha(0xff031a3a, 0.7f * strong)));
+        canvas.drawCircle(kx, ky, knob * 0.96f, paint);
+        paint.setShader(null);
+        // the concave dish, lit on its far side
+        float dish = knob * 0.68f;
+        paint.setStyle(Paint.Style.FILL);
+        paint.setShader(radial(kx + dish * 0.3f, ky + dish * 0.35f, dish * 1.3f,
+            new int[] {alpha(SHOCK_LIGHT, 0.5f * strong), alpha(0xff062a5c, 0.85f * strong)}, null));
+        canvas.drawCircle(kx, ky, dish, paint);
+        paint.setShader(null);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(Math.max(1f, knob * 0.04f));
+        paint.setColor(alpha(0xff031a3a, 0.5f * strong));
+        canvas.drawCircle(kx, ky, dish, paint);
+        // the ring of dots on the cap's rim
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(alpha(0xff03234a, 0.55f * strong));
+        for (int i = 0; i < 28; i++) {
+            double a = Math.toRadians(i * 360.0 / 28);
+            canvas.drawCircle(kx + (float) Math.cos(a) * knob * 0.83f, ky + (float) Math.sin(a) * knob * 0.83f,
+                Math.max(0.8f, knob * 0.045f), paint);
+        }
+        gloss(canvas, kx, ky, knob, 0.3f * strong);
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        if (!showing && !editing)
+            return;
+        canvas.save();
+        canvas.scale(scale, scale);
+        if (!hidden || editing) {
+            if (layout.shown(TouchLayout.LEFT))
+                drawStick(canvas);
+            for (int i = 0; i < layout.size(); i++) {
+                if (!layout.shown(i) || layout.type(i) == TouchLayout.LEFT)
+                    continue;
+                drawControl(canvas, i, held(i) || dragControl == i);
+            }
+        }
+        drawToolbar(canvas);
+        canvas.restore();
+    }
+}
+{
         int type = layout.type(i);
         float x = layout.x(i);
         float y = layout.y(i);
